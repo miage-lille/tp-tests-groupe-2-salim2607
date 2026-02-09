@@ -5,6 +5,18 @@ import { IIdGenerator } from 'src/core/ports/id-generator.interface';
 import { InMemoryWebinarRepository } from 'src/webinars/adapters/webinar-repository.in-memory';
 import { Webinar } from 'src/webinars/entities/webinar.entity';
 import { OrganizeWebinars } from 'src/webinars/use-cases/organize-webinar';
+import { PrismaClient } from '@prisma/client';
+import {
+  PostgreSqlContainer,
+  StartedPostgreSqlContainer,
+} from '@testcontainers/postgresql';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+import { PrismaWebinarRepository } from 'src/webinars/adapters/webinar-repository.prisma';
+import { testUser } from 'src/users/tests/user-seeds';
+
+const asyncExec = promisify(exec);
+jest.setTimeout(60_000);
 
 describe('Feature: Organize webinars', () => {
   let repository: InMemoryWebinarRepository;
@@ -133,5 +145,64 @@ describe('Feature: Organize webinars', () => {
 
       expect(repository.database).toEqual([]);
     });
+  });
+});
+
+describe('OrganizeWebinar use-case (integration)', () => {
+  let container: StartedPostgreSqlContainer;
+  let prisma: PrismaClient | undefined;
+  let repository: PrismaWebinarRepository;
+  let useCase: OrganizeWebinars;
+
+  beforeAll(async () => {
+    container = await new PostgreSqlContainer()
+      .withDatabase('test_db')
+      .withUsername('user_test')
+      .withPassword('password_test')
+      .start();
+
+    const dbUrl = container.getConnectionUri();
+    prisma = new PrismaClient({ datasources: { db: { url: dbUrl } } });
+
+    // exécute les migrations Prisma
+    await asyncExec(`DATABASE_URL=${dbUrl} npx prisma migrate deploy`);
+    await prisma.$connect();
+  });
+
+  beforeEach(async () => {
+    if (!prisma) throw new Error('prisma not initialized');
+    repository = new PrismaWebinarRepository(prisma);
+    // adapte si OrganizeWebinar prend d'autres dépendances (id/date generator)
+    useCase = new OrganizeWebinars(
+      repository,
+      new FixedIdGenerator(),
+      new FixedDateGenerator(),
+    );
+    await prisma.webinar.deleteMany();
+  });
+
+  afterAll(async () => {
+    if (prisma) await prisma.$disconnect();
+    if (container) await container.stop();
+  });
+
+  it('should create a webinar in the database', async () => {
+    // ARRANGE
+    const payload = {
+      userId: testUser.alice.props.id,
+      title: 'Integration Webinar',
+      startDate: new Date('2025-01-01T00:00:00Z'),
+      endDate: new Date('2025-01-01T01:00:00Z'),
+      seats: 50,
+    };
+
+    // ACT
+    await useCase.execute(payload);
+
+    // ASSERT (on vérifie directement la DB)
+    const list = await prisma!.webinar.findMany();
+    expect(list).toHaveLength(1);
+    expect(list[0].organizerId).toBe(testUser.alice.props.id);
+    expect(list[0].seats).toBe(50);
   });
 });
