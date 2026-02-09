@@ -8,6 +8,7 @@ export default {
   coverageProvider: 'v8',
   moduleFileExtensions: ['js', 'json', 'ts', 'tsx'],
   rootDir: 'src',
+  verbose: true,
   transform: {
     '^.+\\.tsx?$': [
       'ts-jest',
